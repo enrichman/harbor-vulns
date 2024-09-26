@@ -26,6 +26,7 @@ struct GoharborError {
     message: String,
 }
 
+// https://github.com/goharbor/harbor/blob/cb7fef1840096162d51ed4297286027a33d7b5b1/src/pkg/scan/vuln/report.go#L208
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct Report {
     generated_at: String,
@@ -81,6 +82,7 @@ impl Client {
         format!("{}{}{}", self.host, "/api/v2.0", path)
     }
 
+    // https://github.com/goharbor/harbor/blob/main/api/v2.0/swagger.yaml#L1416-L1447
     pub(crate) async fn vulnerabilities(&self, project_name: &str, repository_name: &str, reference: &str) -> Result<GoharborResponse, MyError> {
         // /projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/additions/vulnerabilities:
         let path = format!("/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/additions/vulnerabilities");
