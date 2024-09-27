@@ -1,3 +1,4 @@
+use std::iter::Map;
 use serde::{Deserialize, Serialize};
 use crate::MyError;
 
@@ -9,7 +10,7 @@ pub struct Client {
 }
 
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub enum GoharborResponse {
     Error,
     Empty {},
@@ -17,21 +18,30 @@ pub enum GoharborResponse {
         deserialize = "application/vnd.security.vulnerability.report; version=1.1",
         serialize = "application/vnd.security.vulnerability.report; version=1.1",
     ))]
-    Report(Report),
+    Vulnerabilities(Report),
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct GoharborError {
     code: String,
     message: String,
 }
 
 // https://github.com/goharbor/harbor/blob/cb7fef1840096162d51ed4297286027a33d7b5b1/src/pkg/scan/vuln/report.go#L208
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Report {
     generated_at: String,
-    severity: Severity,
     scanner: Scanner,
+    severity: Severity,
+    vulnerabilities: Vec<VulnerabilityItem>,
+    sbom: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct Scanner {
+    name: String,
+    vendor: String,
+    version: String,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -60,13 +70,62 @@ pub enum Severity {
     Critical,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct VulnerabilityItem {
+    // The unique identifier of the vulnerability.
+    // e.g: CVE-2017-8283
+    id: String,
+    // An operating system or software dependency package containing the vulnerability.
+    // e.g: dpkg
+    package: String,
+    // The version of the package containing the vulnerability.
+    // e.g: 1.17.27
+    version: String,
+    // The version of the package containing the fix if available.
+    // e.g: 1.18.0
+    fix_version: String,
+    // A standard scale for measuring the severity of a vulnerability.
+    severity: Severity,
+    // example: dpkg-source in dpkg 1.3.0 through 1.18.23 is able to use a non-GNU patch program
+    // and does not offer a protection mechanism for blank-indented diff hunks, which allows remote
+    // attackers to conduct directory traversal attacks via a crafted Debian source package, as
+    // demonstrated by using of dpkg-source on NetBSD.
+    description: String,
+    // The list of link to the upstream database with the full description of the vulnerability.
+    // Format: URI
+    // e.g: List [ "https://security-tracker.debian.org/tracker/CVE-2017-8283" ]
+    links: Vec<String>,
+    // The artifact digests which the vulnerability belonged
+    // e.g: sha256@ee1d00c5250b5a886b09be2d5f9506add35dfb557f1ef37a7e4b8f0138f32956
+    artifact_digests: Vec<String>,
+    // The CVSS3 and CVSS2 based scores and attack vector for the vulnerability item
+    preferred_cvss: CVSS,
+    // A separated list of CWE Ids associated with this vulnerability
+    // e.g. CWE-465,CWE-124
+    cwe_ids: Vec<String>,
+    // A collection of vendor specific attributes for the vulnerability item
+    // with each attribute represented as a key-value pair.
+    vendor_attributes: serde_json::Map<String, serde_json::Value>,
+}
+
+// CVSS holds the score and attack vector for the vulnerability based on the CVSS3 and CVSS2 standards
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
-pub struct Scanner {
-    name: String,
-    vendor: String,
-    version: String,
+pub struct CVSS {
+    // The CVSS-3 score for the vulnerability
+    // e.g. 2.5
+    score_v3: Option<f64>,
+    // The CVSS-3 score for the vulnerability
+    // e.g. 2.5
+    score_v2: Option<f64>,
+    // The CVSS-3 attack vector.
+    // e.g. CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N
+    vector_v3: String,
+    // The CVSS-3 attack vector.
+    // e.g. AV:L/AC:M/Au:N/C:P/I:N/A:N
+    vector_v2: String,
 }
+
 
 impl Client {
     pub(crate) fn new(host: &str, username: &str, password: &str) -> Result<Self, MyError> {
@@ -108,7 +167,12 @@ mod tests {
     #[test]
     fn empty_response() {
         let res = serde_json::from_str::<GoharborResponse>("{}").unwrap();
-        assert_eq!(res, GoharborResponse::Empty {});
+        match res {
+            GoharborResponse::Empty {} => {
+                panic!("bum")
+            }
+            _ => panic!("unexpected result")
+        }
     }
 
     #[test]
@@ -166,21 +230,22 @@ mod tests {
         println!("XXX {:?}", res);
 
         match res {
-            GoharborResponse::Error => {
-                println!("XXX {:?}", res);
+            GoharborResponse::Vulnerabilities(report) => {
+                assert_eq!(report.generated_at, "2024-08-01T09:37:05.561615505Z".to_string());
+                assert_eq!(report.scanner, Scanner {
+                    name: "Trivy".to_string(),
+                    vendor: "Aqua Security".to_string(),
+                    version: "v0.51.2".to_string(),
+                });
+                assert_eq!(report.severity, Severity::Critical);
             }
-            GoharborResponse::Report(report) => {
-                println!("XXX {:?}", report);
-            }
-            _ => {}
+            _ => panic!("unexpected response")
         }
-
-        // assert_eq!(res, GoharborResponse::GoharborSuccess(VulnReport{generated_at:"2024-08-01T09:37:05.561615505Z".to_string()}));
     }
 
     #[test]
     fn vuln_response2() {
-        let res = serde_json::to_string(&GoharborResponse::Report(Report {
+        let res = serde_json::to_string(&GoharborResponse::Vulnerabilities(Report {
             generated_at: "123".to_string(),
             severity: Severity::Critical,
             scanner: Scanner {
@@ -188,6 +253,8 @@ mod tests {
                 vendor: "".to_string(),
                 version: "".to_string(),
             },
+            vulnerabilities: vec![],
+            sbom: None,
         })).unwrap();
         println!("XXX {:?}", res);
     }
