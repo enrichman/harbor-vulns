@@ -1,6 +1,13 @@
-use std::iter::Map;
 use serde::{Deserialize, Serialize};
-use crate::MyError;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum MyError {
+    #[error("Error executing reqwest X.\nError: {0}")]
+    HTTPError(#[from] reqwest::Error),
+    #[error("error parsing")]
+    JSONError(#[from] serde_json::Error),
+}
 
 pub struct Client {
     host: String,
@@ -128,7 +135,7 @@ pub struct CVSS {
 
 
 impl Client {
-    pub(crate) fn new(host: &str, username: &str, password: &str) -> Result<Self, MyError> {
+    pub fn new(host: &str, username: &str, password: &str) -> Result<Self, MyError> {
         Ok(Self {
             host: host.to_owned(),
             username: username.to_owned(),
@@ -137,12 +144,12 @@ impl Client {
         })
     }
 
-    pub(crate) fn build_endpoint(&self, path: &str) -> String {
+    fn build_endpoint(&self, path: &str) -> String {
         format!("{}{}{}", self.host, "/api/v2.0", path)
     }
 
     // https://github.com/goharbor/harbor/blob/main/api/v2.0/swagger.yaml#L1416-L1447
-    pub(crate) async fn vulnerabilities(&self, project_name: &str, repository_name: &str, reference: &str) -> Result<GoharborResponse, MyError> {
+    pub async fn vulnerabilities(&self, project_name: &str, repository_name: &str, reference: &str) -> Result<GoharborResponse, MyError> {
         // /projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/additions/vulnerabilities:
         let path = format!("/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/additions/vulnerabilities");
         let endpoint = self.build_endpoint(path.as_str());
