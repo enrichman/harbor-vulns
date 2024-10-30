@@ -1,5 +1,5 @@
 use std::env;
-use goharbor::Client;
+use goharbor::{Client};
 use clap::{builder::PossibleValue, crate_authors, crate_description, crate_name, crate_version, Arg, ArgMatches, Command};
 use dotenv::dotenv;
 
@@ -37,23 +37,22 @@ async fn main() {
 
     let matches = cmd.get_matches();
     let _matches = match matches.subcommand() {
-        Some(("vulns", matches)) => { run_vulns(matches); }
+        Some(("vulns", matches)) => { run_vulns(matches).await }
         _ => unreachable!("clap should ensure we don't get here"),
     };
 
-    let host = "https://demo.goharbor.io";
-    let username = "harbor-demo-account";
-    let password = "Password123";
+    // let host = "https://demo.goharbor.io";
+    // let username = "harbor-demo-account";
+    // let password = "Password123";
+    //
+    // let client = Client::new(host, username, password).unwrap();
+    //
+    // let project_name = "test-proj-demo";
+    // let repository_name = "nginx";
+    // let reference = "latest";
+    //
+    // let vulns = client.vulnerabilities(project_name, repository_name, reference).await.unwrap();
 
-    let client = Client::new(host, username, password).unwrap();
-
-    let project_name = "test-proj-demo";
-    let repository_name = "nginx";
-    let reference = "latest";
-
-    let vulns = client.vulnerabilities(project_name, repository_name, reference).await.unwrap();
-
-    println!("{:?}", vulns);
 }
 
 fn vulns() -> Command {
@@ -65,8 +64,28 @@ fn vulns() -> Command {
         .arg(Arg::new("project-repo").required(true))
 }
 
-fn run_vulns(matches: &ArgMatches) {
-    if let Some(project_repo) = matches.get_one::<String>("project-repo") {
-        project_repo.split(":")
+async fn run_vulns(matches: &ArgMatches) {
+    if let Some(project_repo_ref) = matches.get_one::<String>("project-repo") {
+        let splitted: Vec<&str> = project_repo_ref.split(":").collect();
+        let reference = *splitted.get(1).unwrap_or(&"latest");
+
+        let project_repo: Vec<&str> = splitted.first().map(|&s| s).unwrap_or_default().split("/").collect();
+        let project_name = project_repo.get(0).map(|&s| s).unwrap_or_default();
+        let repository_name = project_repo.get(1).map(|&s| s).unwrap_or_default();
+
+        let host = "https://demo.goharbor.io";
+        let username = "harbor-demo-account";
+        let password = "Password123";
+
+        let client = Client::new(host, username, password).unwrap();
+
+        match client.vulnerabilities(project_name, repository_name, reference).await {
+            Ok(res) => {
+                println!("{:?}", res);
+            }
+            Err(err) => {
+                println!("{:?}", err);
+            }
+        };
     }
 }

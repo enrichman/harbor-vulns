@@ -18,24 +18,46 @@ pub struct Client {
 
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum GoharborResponse {
-    Error,
+    Error(GoharborErrors),
+    Vulnerabilities(ReportV1),
     Empty {},
-    #[serde(rename(
-        deserialize = "application/vnd.security.vulnerability.report; version=1.1",
-        serialize = "application/vnd.security.vulnerability.report; version=1.1",
-    ))]
-    Vulnerabilities(Report),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct GoharborError {
+#[serde(untagged)]
+pub enum VulnResponse {
+    Error(GoharborErrors),
+    Success(ReportV1),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GoharborErrors {
+    pub errors: Vec<GoharborError>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GoharborError {
     code: String,
     message: String,
 }
 
 // https://github.com/goharbor/harbor/blob/cb7fef1840096162d51ed4297286027a33d7b5b1/src/pkg/scan/vuln/report.go#L208
 #[derive(Debug, Deserialize, Serialize)]
+pub struct ReportV1 {
+    #[serde(rename(
+        deserialize = "application/vnd.security.vulnerability.report; version=1.1",
+        serialize = "application/vnd.security.vulnerability.report; version=1.1",
+    ))]
+    report: Option<Report>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename(
+    deserialize = "application/vnd.security.vulnerability.report; version=1.1",
+    serialize = "application/vnd.security.vulnerability.report; version=1.1",
+))]
 pub struct Report {
     generated_at: String,
     scanner: Scanner,
@@ -149,19 +171,22 @@ impl Client {
     }
 
     // https://github.com/goharbor/harbor/blob/main/api/v2.0/swagger.yaml#L1416-L1447
-    pub async fn vulnerabilities(&self, project_name: &str, repository_name: &str, reference: &str) -> Result<GoharborResponse, MyError> {
+    pub async fn vulnerabilities(&self, project_name: &str, repository_name: &str, reference: &str) -> Result<ReportV1, MyError> {
         // /projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/additions/vulnerabilities:
         let path = format!("/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/additions/vulnerabilities");
         let endpoint = self.build_endpoint(path.as_str());
 
-        let body = self.client.get(endpoint)
+        let response = self.client.get(endpoint)
             .basic_auth(self.username.as_str(), Some(self.password.as_str()))
             .send()
             .await?
-            .text()
-            .await?;
+            .error_for_status()?;
 
-        Ok(serde_json::from_str::<GoharborResponse>(body.as_str())?)
+        let body = response.text().await?;
+        let json_str = body.as_str();
+        println!("{:?}", json_str);
+
+        Ok(serde_json::from_str::<ReportV1>(json_str)?)
     }
 }
 
@@ -173,13 +198,22 @@ mod tests {
 
     #[test]
     fn empty_response() {
-        let res = serde_json::from_str::<GoharborResponse>("{}").unwrap();
-        match res {
-            GoharborResponse::Empty {} => {
-                panic!("bum")
-            }
-            _ => panic!("unexpected result")
-        }
+        let _report = serde_json::from_str::<ReportV1>("{}").unwrap().report;
+    }
+
+    #[test]
+    fn error_response() {
+        let res = serde_json::from_str::<GoharborErrors>(r#"
+        {
+            "errors": [
+                {
+                    "code":"NOT_FOUND",
+                    "message":"path /api/v2.0/projects/nginx/repositories/artifacts/latest/additions/vulnerabilities was not found"
+                }
+            ]
+        }"#
+        ).unwrap();
+        println!("{:?}", res);
     }
 
     #[test]
@@ -233,35 +267,41 @@ mod tests {
     ]
   }
 }"#;
-        let res = serde_json::from_str::<GoharborResponse>(body).unwrap();
-        println!("XXX {:?}", res);
+        let report = serde_json::from_str::<ReportV1>(body).unwrap().report.unwrap();
+        println!("XXX {:?}", report);
 
-        match res {
-            GoharborResponse::Vulnerabilities(report) => {
-                assert_eq!(report.generated_at, "2024-08-01T09:37:05.561615505Z".to_string());
-                assert_eq!(report.scanner, Scanner {
-                    name: "Trivy".to_string(),
-                    vendor: "Aqua Security".to_string(),
-                    version: "v0.51.2".to_string(),
-                });
-                assert_eq!(report.severity, Severity::Critical);
-            }
-            _ => panic!("unexpected response")
-        }
+        assert_eq!(report.generated_at, "2024-08-01T09:37:05.561615505Z".to_string());
+        assert_eq!(report.scanner, Scanner {
+            name: "Trivy".to_string(),
+            vendor: "Aqua Security".to_string(),
+            version: "v0.51.2".to_string(),
+        });
+        assert_eq!(report.severity, Severity::Critical);
     }
 
     #[test]
     fn vuln_response2() {
-        let res = serde_json::to_string(&GoharborResponse::Vulnerabilities(Report {
-            generated_at: "123".to_string(),
-            severity: Severity::Critical,
-            scanner: Scanner {
-                name: "".to_string(),
-                vendor: "".to_string(),
-                version: "".to_string(),
-            },
-            vulnerabilities: vec![],
-            sbom: None,
+        let res = serde_json::to_string(&GoharborResponse::Vulnerabilities(ReportV1 {
+            report: Some(Report {
+                generated_at: "123".to_string(),
+                severity: Severity::Critical,
+                scanner: Scanner {
+                    name: "".to_string(),
+                    vendor: "".to_string(),
+                    version: "".to_string(),
+                },
+                vulnerabilities: vec![],
+                sbom: None,
+            })
+        })).unwrap();
+        println!("XXX {:?}", res);
+    }
+
+    #[test]
+    fn vuln_response_err() {
+        let res = serde_json::to_string(&GoharborResponse::Error(GoharborErrors {
+            errors: vec![GoharborError { code: "XXX".to_string(), message: "err message here".to_string() }],
+
         })).unwrap();
         println!("XXX {:?}", res);
     }
